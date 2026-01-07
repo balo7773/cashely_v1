@@ -41,6 +41,8 @@ def init_db():
             bank_name TEXT NOT NULL,
             bank_code TEXT NOT NULL,
             account_number TEXT UNIQUE NOT NULL,
+            monnify_reservation_id TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(user_id) REFERENCES users(id),
             FOREIGN KEY(wallet_id) REFERENCES wallets(id)
         )

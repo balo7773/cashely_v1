@@ -73,6 +73,107 @@ class User:
         finally:
             conn.close()
         
+        def create_wallet(self, user_id):
+            """
+            Creates a wallet for the user with the given user_id.
+            Initializes the wallet balance to 0.0.
+            """
+            pass
+
+        def create_virtual_account(self, name, email, bvn, id):
+            """
+            Creates a virtual account for the user.
+            """
+            url = "https://sandbox.monnify.com/api/v2/bank-transfer/reserved-accounts"
+            headers={
+            "Authorization": f"Bearer {JWT}",
+            "Content-Type": "application/json"
+            }
+            params = {
+            "accountReference": f"{name}_{id}",
+            "accountName": name,
+            "currencyCode": "NGN",
+            "contractCode": CONTRACT_CODE,
+            "customerEmail": email,
+            "customerName": name,
+            "bvn": bvn,
+            "getAllAvailableBanks": "true",
+            "preferredBanks": [
+                "50515"
+            ]
+            }
+            
+            response = requests.post(url, headers=headers, json=params)
+            if response.status_code == 200:
+                response_body = response.json().get('responseBody', {})
+                
+                # 1. Seclude the keys from the response body
+                monnify_reservation_id = response_body.get('reservationReference')
+                source_created_at = response_body.get('createdOn')
+                
+                accounts = response_body.get('accounts', [])
+                if not accounts:
+                    print("Error: API response did not contain account details.")
+                    return # Exit if no account info
+                    
+                account_number = accounts[0].get('accountNumber')
+                bank_name = accounts[0].get('bankName')
+                bank_code = accounts[0].get('bankCode')
+
+                # 2. Open the database connection
+                conn = sqlite3.connect('cashely.db')
+                cursor = conn.cursor()
+
+                try:
+                    # 3. Get the wallet_id for this user (assuming one wallet per user for now)
+                    cursor.execute("SELECT id FROM wallets WHERE user_id = ?", (user_id,))
+                    result = cursor.fetchone()
+                    
+                    if not result:
+                        print(f"Error: No wallet found for user_id {user_id}. Cannot create virtual account.")
+                        return # Exit if no wallet exists
+
+                    wallet_id = result[0]
+
+                    # 4. Prepare the SQL INSERT statement
+                    sql = '''
+                        INSERT INTO virtual_accounts (
+                            user_id, 
+                            wallet_id, 
+                            bank_name, 
+                            bank_code, 
+                            account_number, 
+                            monnify_reservation_id, 
+                            created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    '''
+                    
+                    # 5. Execute the query with the data
+                    cursor.execute(sql, (
+                        user_id,
+                        wallet_id,
+                        bank_name,
+                        bank_code,
+                        account_number,
+                        monnify_reservation_id,
+                        source_created_at  # Using the timestamp from Monnify's API
+                    ))
+                    
+                    # 6. Commit the changes to save them
+                    conn.commit()
+                    print("Successfully created and saved virtual account to the database.")
+
+                except sqlite3.Error as e:
+                    print(f"Database error: {e}")
+                finally:
+                    # 7. Close the connection
+                    conn.close()
+
+            else:
+                print(f"Failed to create virtual account. Status: {response.status_code}, Response: {response.text}")
+
+            
+
 # 2. VERIFY BVN AND NIN
 def verify_bvn(bvn, name, dob, mobile_no):
     
@@ -118,25 +219,4 @@ def verify_nin(nin):
 # 4. Create Virtual Account
 def create_virtual_account(account_name, customer_email):
     id = str(uuid.uuid4())
-    url = "https://sandbox.monnify.com/api/v2/bank-transfer/reserved-accounts"
-    headers={
-      "Authorization": f"Bearer {JWT}",
-      "Content-Type": "application/json"
-    }
-    params = {
-      "accountReference": f"{account_name}_{id}",
-      "accountName": account_name,
-      "currencyCode": "NGN",
-      "contractCode": CONTRACT_CODE,
-      "customerEmail": customer_email,
-      "customerName": "John Doe",
-      "bvn": "21212121212",
-      "getAllAvailableBanks": "true",
-      "preferredBanks": [
-        "50515"
-      ]
-    }
     
-    response = requests.post(url, headers=headers, json=params)
-
-    return response.json()
