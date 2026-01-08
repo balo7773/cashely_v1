@@ -9,6 +9,7 @@ from dotenv import load_dotenv, set_key, find_dotenv
 import os
 import requests
 import base64
+import bcrypt
 import uuid
 import sqlite3
 import test_db
@@ -56,7 +57,7 @@ class User:
     wallet management, and virtual account creation.
     """
 
-    def __init__(self, full_name, email, mobile_no, bvn, nin, dob, password_hash):
+    def __init__(self, full_name, email, mobile_no, bvn, nin, dob, password):
         """
         Initializes a new User instance.
 
@@ -75,9 +76,13 @@ class User:
         self.bvn = bvn
         self.nin = nin
         self.dob = dob
-        self.password_hash = password_hash
+        if len(password) < 8:
+            raise ValueError("Password must be at least 8 characters long.")
+        else:
+            self.password = password
 
-    def store_user(self):
+    @classmethod
+    def sign_up(cls, full_name, email, mobile_no, bvn, nin, dob, password):
         """
         Persists the user instance into the local SQLite database.
         
@@ -89,17 +94,24 @@ class User:
         cursor = conn.cursor()
 
         try:
+            cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
+            if cursor.fetchone():
+                print(f"❌ Email '{email}' is already registered")
+                return None
+            
+            password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+
             cursor.execute('''
                 INSERT INTO users (full_name, email, mobile_no, bvn, nin, dob, password_hash)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
-                self.full_name,
-                self.email,
-                self.mobile_no,
-                self.bvn,
-                self.nin,
-                self.dob,
-                self.password_hash
+                full_name,
+                email,
+                mobile_no,
+                bvn,
+                nin,
+                dob,
+                password_hash
             ))
             conn.commit()
             user_id = cursor.lastrowid  # Get the auto-generated ID
@@ -107,6 +119,45 @@ class User:
         except sqlite3.IntegrityError as e:
             # Handle duplicate email, BVN, or NIN
             print(f"Error storing user: {e}")
+            return None
+        finally:
+            conn.close()
+
+    @classmethod
+    def sign_in(cls, mobile_no, password):
+        """
+        Authenticates a user by verifying their mobile number and password.
+
+        Args:
+            mobile_no (str): The user's mobile number.
+            password (str): The user's password.
+
+        Returns:
+            tuple: A tuple containing (user_id, full_name) if successful.
+            None: If authentication fails (user not found or wrong password).
+        """
+        conn = sqlite3.connect('cashely.db')
+        cursor = conn.cursor()
+
+        try:
+            # Retrieve user details based on mobile number
+            cursor.execute("SELECT id, full_name, password_hash FROM users WHERE mobile_no = ?", (mobile_no,))
+            user_data = cursor.fetchone()
+
+            if not user_data:
+                print("❌ User not found.")
+                return None
+
+            user_id, full_name, stored_password_hash = user_data
+            # Verify the provided password against the stored hash
+            if bcrypt.checkpw(password.encode('utf-8'), stored_password_hash):
+                print("✅ Sign-in successful.")
+                return user_id, full_name
+            else:
+                print("❌ Incorrect password.")
+                return None
+        except sqlite3.Error as e:
+            print(f"Error during sign-in: {e}")
             return None
         finally:
             conn.close()
@@ -325,7 +376,7 @@ class User:
             print(f"Failed to create virtual account. Status: {response.status_code}, Response: {response.text}")
 
             
-    def get_wallet_balance(self, mobile_no):
+    def get_wallet_balance(self, user_id):
         """
         Queries the database for the wallet balance associated with a mobile number.
 
@@ -340,17 +391,7 @@ class User:
         cursor = conn.cursor()
 
         try:
-            # 1. Get the user ID based on the mobile number
-            cursor.execute("SELECT id FROM users WHERE mobile_no = ?", (mobile_no,))
-            user_row = cursor.fetchone()
-
-            if not user_row:
-                print(f"No user found with mobile number: {mobile_no}")
-                return None
-
-            user_id = user_row[0]
-
-            # 2. Get the wallet balance for the user
+            # 1. Get the wallet balance for the user
             cursor.execute("SELECT balance FROM wallets WHERE user_id = ?", (user_id,))
             wallet_row = cursor.fetchone()
 
@@ -367,4 +408,95 @@ class User:
         finally:
             conn.close()
 
+    def update_wallet_balance(self, user_id, accountReference, new_balance):
+        """
+        Updates the wallet balance for a specific user and account reference.
+
+        Args:
+            user_id (int): The ID of the user.
+            accountReference (str): The unique account reference.
+            new_balance (float): The new balance to set.
+
+        Returns:
+            None
+        """
+        conn = sqlite3.connect('cashely.db')
+        cursor = conn.cursor()
+
+        try:
+            # 1. Update the wallet balance
+            cursor.execute(
+                "UPDATE wallets SET balance = ? WHERE user_id = ? AND account_reference = ?",
+                (new_balance, user_id, accountReference)
+            )
+            conn.commit()
+            print(f"Wallet balance updated to {new_balance} for user ID: {user_id}")
+
+        except sqlite3.Error as e:
+            print(f"Database error: {e}")
+        finally:
+            conn.close()
+
+    def create_inventory(self, name, quantity, price):
+        """
+        Creates a new inventory item and adds the initial batch.
+
+        Args:
+            name (str): The name of the inventory item.
+            quantity (int): The quantity of the item in the initial batch.
+            price (float): The unit price of the item.
+
+        Returns:
+            None
+        """
+        item_id = str(uuid.uuid4())
+        conn = sqlite3.connect('cashely.db')
+        cursor = conn.cursor()
+        try:
+            # Insert the inventory item definition
+            cursor.execute('''
+                INSERT INTO inventory_items (id, name)
+                VALUES (?, ?)
+            ''', (item_id, name))
+            
+            # Insert the initial batch for this item
+            cursor.execute('''
+                INSERT INTO inventory_batches (inventory_item_id, quantity, unit_price)
+                VALUES (?, ?, ?)
+            ''', (item_id, quantity, price))
+            
+            conn.commit()
+            print(f"Inventory item '{name}' created with ID: {item_id}")
+        except sqlite3.IntegrityError as e:
+            print(f"Error creating inventory item: {e}")
+        finally:
+            conn.close()
     
+    def add_inventory_batch(self, item_id, quantity, price):
+        """
+        Adds a new batch to an existing inventory item.
+
+        Args:
+            item_id (str): The ID of the inventory item.
+            quantity (int): The quantity of items in this batch.
+            price (float): The unit price for items in this batch.
+
+        Returns:
+            None
+        """
+        conn = sqlite3.connect('cashely.db')
+        cursor = conn.cursor()
+        try:
+            # Insert a new batch record linked to the inventory item
+            cursor.execute('''
+                INSERT INTO inventory_batches (inventory_item_id, quantity, unit_price)
+                VALUES (?, ?, ?)
+            ''', (item_id, quantity, price))
+            
+            conn.commit()
+            print(f"Added batch to inventory item ID: {item_id}")
+        except sqlite3.IntegrityError as e:
+            print(f"Error adding inventory batch: {e}")
+        finally:
+            conn.close()   
+        

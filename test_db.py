@@ -64,6 +64,27 @@ def init_db():
         )
     ''')
 
+    # 5. Inventory Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS inventory_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL UNIQUE,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    ''')
+
+    #6. Inventory Batches Table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS inventory_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            inventory_item_id INTEGER NOT NULL,
+            quantity INTEGER NOT NULL CHECK (quantity >= 0),
+            unit_price REAL NOT NULL CHECK (unit_price > 0),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(inventory_item_id) REFERENCES inventory_items(id)
+        )
+    ''')
     conn.commit()
     conn.close()
 
